@@ -236,15 +236,15 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 			},
 		}}},
 		{{Key: "$addFields", Value: bson.M{
-			"date":                        dateStr,
-			"first_valid_users_count":     "$valid_users_count",
-			"first_playable_users_count":  "$playable_users_count",
-			"first_jackpot_users_count":   "$jackpot_users_count",
-			"first_processed_users_count": "$processed_users_count",
-			"inc_valid_users_count":       0,
-			"inc_playable_users_count":    0,
-			"inc_jackpot_users_count":     0,
-			"inc_processed_users_count":   "$processed_users_count",
+			"date": dateStr,
+			// "first_valid_users_count":     "$valid_users_count",
+			// "first_playable_users_count":  "$playable_users_count",
+			// "first_jackpot_users_count":   "$jackpot_users_count",
+			// "first_processed_users_count": "$processed_users_count",
+			// "inc_valid_users_count":       0,
+			// "inc_playable_users_count":    0,
+			// "inc_jackpot_users_count":     0,
+			// "inc_processed_users_count":   0,
 		}}},
 		{{Key: "$merge", Value: bson.M{
 			"into": CollectionAppStats,
@@ -341,7 +341,7 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 								bson.M{
 									"$subtract": bson.A{
 										"$processed_users_count",
-										"$processed_users_count",
+										"$$first_processed_users_count",
 									},
 								},
 								0,
