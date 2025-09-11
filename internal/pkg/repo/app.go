@@ -102,6 +102,7 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 									},
 								},
 							},
+							"last_check_at": bson.M{"$exists": true, "$ne": nil},
 						}}},
 						{{Key: "$sort", Value: bson.M{"last_check_at": -1}}},
 						{{Key: "$project", Value: bson.M{
@@ -138,6 +139,7 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 							},
 							"is_invalid_cred": false,
 							"balance":         bson.M{"$gte": 100000},
+							"last_check_at":   bson.M{"$exists": true, "$ne": nil},
 						}}},
 						{{Key: "$sort", Value: bson.M{"last_check_at": -1}}},
 						{{Key: "$project", Value: bson.M{
@@ -252,77 +254,86 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 				"app_code",
 				"date",
 			},
+			"let": bson.M{
+				"newLatestUsers":    "$latest_users_check_list",
+				"newValidCount":     "$valid_users_count",
+				"newPlayableList":   "$playable_users_list",
+				"newPlayableCount":  "$playable_users_count",
+				"newJackpotList":    "$jackpot_users_list",
+				"newJackpotCount":   "$jackpot_users_count",
+				"newProcessedCount": "$processed_users_count",
+			},
 			"whenMatched": bson.A{
 				bson.M{
 					"$set": bson.M{
-						"latest_users_check_list": "$latest_users_check_list",
-						"valid_users_count":       "$valid_users_count",
-						"playable_users_list":     "$playable_users_list",
-						"playable_users_count":    "$playable_users_count",
-						"jackpot_users_list":      "$jackpot_users_list",
-						"jackpot_users_count":     "$jackpot_users_count",
-						"processed_users_count":   "$processed_users_count",
+						"latest_users_check_list": "$$newLatestUsers",
+						"valid_users_count":       "$$newValidCount",
+						"playable_users_list":     "$$newPlayableList",
+						"playable_users_count":    "$$newPlayableCount",
+						"jackpot_users_list":      "$$newJackpotList",
+						"jackpot_users_count":     "$$newJackpotCount",
+						"processed_users_count":   "$$newProcessedCount",
 						"first_valid_users_count": bson.M{
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_valid_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_valid_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_valid_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_valid_users_count", nil}},
 									},
 								},
-								"$valid_users_count",
-								"$$ROOT.first_valid_users_count",
+								"$$newValidCount",
+								"$first_valid_users_count",
 							},
 						},
 						"first_playable_users_count": bson.M{
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_playable_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_playable_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_playable_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_playable_users_count", nil}},
 									},
 								},
-								"$playable_users_count",
-								"$$ROOT.first_playable_users_count",
+								"$$newPlayableCount",
+								"$first_playable_users_count",
 							},
 						},
 						"first_jackpot_users_count": bson.M{
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_jackpot_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_jackpot_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_jackpot_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_jackpot_users_count", nil}},
 									},
 								},
-								"$jackpot_users_count",
-								"$$ROOT.first_jackpot_users_count",
+								"$$newJackpotCount",
+								"$first_jackpot_users_count",
 							},
 						},
 						"first_processed_users_count": bson.M{
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_processed_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_processed_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_processed_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_processed_users_count", nil}},
 									},
 								},
-								"$processed_users_count",
-								"$$ROOT.first_processed_users_count",
+								"$$newProcessedCount",
+								"$first_processed_users_count",
 							},
 						},
 						"inc_valid_users_count": bson.M{
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_valid_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_valid_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_valid_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_valid_users_count", nil}},
 									},
 								},
 								0,
 								bson.M{
 									"$subtract": bson.A{
-										"$valid_users_count",
-										"$$ROOT.first_valid_users_count",
+										"$$newValidCount",
+										"$first_valid_users_count",
 									},
 								},
 							},
@@ -331,15 +342,15 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_playable_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_playable_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_playable_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_playable_users_count", nil}},
 									},
 								},
 								0,
 								bson.M{
 									"$subtract": bson.A{
-										"$playable_users_count",
-										"$$ROOT.first_playable_users_count",
+										"$$newPlayableCount",
+										"$first_playable_users_count",
 									},
 								},
 							},
@@ -348,15 +359,15 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_jackpot_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_jackpot_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_jackpot_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_jackpot_users_count", nil}},
 									},
 								},
 								0,
 								bson.M{
 									"$subtract": bson.A{
-										"$jackpot_users_count",
-										"$$ROOT.first_jackpot_users_count",
+										"$$newJackpotCount",
+										"$first_jackpot_users_count",
 									},
 								},
 							},
@@ -365,15 +376,15 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 							"$cond": bson.A{
 								bson.M{
 									"$or": bson.A{
-										bson.M{"$eq": bson.A{"$$ROOT.first_processed_users_count", -1}},
-										bson.M{"$eq": bson.A{"$$ROOT.first_processed_users_count", nil}},
+										bson.M{"$eq": bson.A{"$first_processed_users_count", -1}},
+										bson.M{"$eq": bson.A{"$first_processed_users_count", nil}},
 									},
 								},
 								0,
 								bson.M{
 									"$subtract": bson.A{
-										"$processed_users_count",
-										"$$ROOT.first_processed_users_count",
+										"$$newProcessedCount",
+										"$first_processed_users_count",
 									},
 								},
 							},
