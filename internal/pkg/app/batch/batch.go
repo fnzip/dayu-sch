@@ -27,8 +27,8 @@ func (a *BatchApp) Run() {
 	dbName := os.Getenv("MONGO_DB")
 	cfBatchUrl := os.Getenv("CF_BATCH_URL")
 	cfBatchToken := os.Getenv("CF_BATCH_TOKEN")
-	wgPrivateKey := os.Getenv("WG_PRIVATEKEY")
-	wgEndpoint := os.Getenv("WG_ENDPOINT")
+	// wgPrivateKey := os.Getenv("WG_PRIVATEKEY")
+	// wgEndpoint := os.Getenv("WG_ENDPOINT")
 
 	md, err := db.NewDbCon(a.ctx, uri, dbName)
 	if err != nil {
@@ -40,10 +40,10 @@ func (a *BatchApp) Run() {
 
 	cfb := cfbatch.NewCFBatchApi(cfBatchUrl, cfBatchToken)
 
-	endpoint, err := resolveIPPAndPort(wgEndpoint)
-	if err != nil {
-		log.Fatal(err)
-	}
+	// endpoint, err := resolveIPPAndPort(wgEndpoint)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 
 	index := primitive.NilObjectID
 
@@ -55,12 +55,12 @@ func (a *BatchApp) Run() {
 		default:
 		}
 
-		dialer, err := NewWGDialer(wgPrivateKey, endpoint)
-		if err != nil {
-			log.Fatal(err)
-		}
+		// dialer, err := NewWGDialer(wgPrivateKey, endpoint)
+		// if err != nil {
+		// 	log.Fatal(err)
+		// }
 
-		cfb.SetDialContext(dialer.WireDialer.tnet.DialContext)
+		// cfb.SetDialContext(dialer.WireDialer.tnet.DialContext)
 
 		apps, err := ar.GetClaimAppCodes(a.ctx)
 		if err != nil {
@@ -130,6 +130,6 @@ func (a *BatchApp) Run() {
 		// Wait for all goroutines to complete
 		wg.Wait()
 
-		dialer.WireDialer.Device.Close()
+		// dialer.WireDialer.Device.Close()
 	}
 }
