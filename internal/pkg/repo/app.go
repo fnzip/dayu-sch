@@ -341,7 +341,7 @@ func (r *AppRepo) AggregateAppStats(ctx context.Context) error {
 								bson.M{
 									"$subtract": bson.A{
 										"$processed_users_count",
-										"$$first_processed_users_count",
+										"$first_processed_users_count",
 									},
 								},
 								0,
