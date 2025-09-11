@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -22,7 +23,7 @@ func NewUserRepo(md *mongo.Database) *UserRepo {
 	}
 }
 
-func (r *UserRepo) GetClaimUsers(ctx context.Context, apps []*ModelApp, limit uint) ([]*ModelUser, error) {
+func (r *UserRepo) GetClaimUsers(ctx context.Context, apps []*ModelApp, limit uint, index primitive.ObjectID) ([]*ModelUser, error) {
 	// Calculate previous day at 23:59:00 GMT+7
 	loc, _ := time.LoadLocation("Asia/Jakarta") // GMT+7
 	now := time.Now().In(loc)
@@ -37,10 +38,12 @@ func (r *UserRepo) GetClaimUsers(ctx context.Context, apps []*ModelApp, limit ui
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
+			"_id":             bson.M{"$gte": index},
 			"app_code":        bson.M{"$in": appCodes},
 			"is_invalid_cred": false,
 			"last_check_at":   bson.M{"$lte": cutoffTime},
 		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "_id", Value: 1}}}},
 		{{Key: "$limit", Value: limit}},
 		bson.D{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: CollectionApps},

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/log"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type BatchApp struct {
@@ -44,6 +45,8 @@ func (a *BatchApp) Run() {
 		log.Fatal(err)
 	}
 
+	index := primitive.NilObjectID
+
 	for {
 		select {
 		case <-a.ctx.Done():
@@ -64,7 +67,7 @@ func (a *BatchApp) Run() {
 			log.Fatal(err)
 		}
 
-		users, err := ur.GetClaimUsers(a.ctx, apps, 500)
+		users, err := ur.GetClaimUsers(a.ctx, apps, 500, index)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -72,12 +75,15 @@ func (a *BatchApp) Run() {
 		log.Info("got users", "total", len(users))
 
 		if len(users) == 0 {
-			break
+			index = primitive.NilObjectID
+			continue
 		}
+
+		index = users[len(users)-1].ID
 
 		// Split users into chunks of 25
 		userChunks := make([][]*repo.ModelUser, 0)
-		chunkSize := 50
+		chunkSize := 10
 
 		for i := 0; i < len(users); i += chunkSize {
 			end := i + chunkSize
