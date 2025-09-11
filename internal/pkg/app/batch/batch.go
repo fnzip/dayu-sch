@@ -77,7 +77,7 @@ func (a *BatchApp) Run() {
 
 		// Split users into chunks of 25
 		userChunks := make([][]*repo.ModelUser, 0)
-		chunkSize := 25
+		chunkSize := 50
 
 		for i := 0; i < len(users); i += chunkSize {
 			end := i + chunkSize
