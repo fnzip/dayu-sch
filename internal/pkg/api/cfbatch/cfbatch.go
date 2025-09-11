@@ -16,7 +16,7 @@ func NewCFBatchApi(baseUrl, token string) *CFBatchApi {
 		SetCommonHeader("x-token", token).
 		SetBaseURL(baseUrl)
 
-	// client.DevMode()
+	client.DevMode()
 
 	return &CFBatchApi{
 		client: client,
