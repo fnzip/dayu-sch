@@ -64,7 +64,7 @@ func (a *BatchApp) Run() {
 			log.Fatal(err)
 		}
 
-		users, err := ur.GetClaimUsers(a.ctx, apps, 1)
+		users, err := ur.GetClaimUsers(a.ctx, apps, 500)
 		if err != nil {
 			log.Fatal(err)
 		}
