@@ -2,7 +2,7 @@ package cfbatch
 
 type CFBatchUser struct {
 	// user
-	ID       string  `json:"id"`
+	ID       string  `json:"_id"`
 	AppCode  string  `json:"app_code"`
 	Username string  `json:"username"`
 	Coin     float64 `json:"coin"`
