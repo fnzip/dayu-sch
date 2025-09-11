@@ -40,7 +40,7 @@ func (a *SchStat) Run() {
 			log.Fatal(err)
 		}
 
-		log.Info("Aggregation completed", "duration", duration, "waiting", "15 seconds before next run")
+		log.Info("Aggregation completed", "duration", duration, "waiting", "15s")
 		time.Sleep(15 * time.Second)
 	}
 }
