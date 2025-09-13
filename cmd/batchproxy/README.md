@@ -35,9 +35,9 @@ proxy_password: "your-dataimpulse-password"
 ## Command Line Options
 
 - `-i <file>`: Input YAML config file (if not provided, falls back to environment variables)
-- `-concurrent` / `-c <number>`: Number of concurrent workers (default: 10)
-- `-batch` / `-b <number>`: Batch limit (default: 10)
-- `-delay` / `-d <number>`: Delay between rounds in seconds (default: 1)
+-  `-c <number>`: Number of concurrent workers (default: 10)
+- `-b <number>`: Batch limit (default: 10)
+- `-d <number>`: Delay between rounds in seconds (default: 1)
 
 ## Examples
 
@@ -46,9 +46,6 @@ proxy_password: "your-dataimpulse-password"
 ./batchproxy-cli -i config.yaml
 
 # Use config file with 20 concurrent workers, batch size 8, 3 second delay
-./batchproxy-cli -i config.yaml -concurrent 20 -batch 8 -delay 3
-
-# Use short flags
 ./batchproxy-cli -i config.yaml -c 20 -b 8 -d 3
 
 # Fallback to environment variables
