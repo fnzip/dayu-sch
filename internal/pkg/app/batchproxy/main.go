@@ -63,10 +63,8 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 	)
 
 	// Create parent CFBatchApi
-	api := cfbatch_v2.NewCFBatchApi(config.BaseURL, config.Token)
-	// Construct proxy URL for dataimpulse with sticky port (auto-rotating)
 	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxyPort)
-	api.SetProxyURL(proxyURL)
+	parentApi := cfbatch_v2.NewCFBatchApi(config.BaseURL, config.Token)
 
 	log.Info("Created parent CFBatchApi instance")
 
@@ -95,6 +93,9 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
+
+				api := parentApi.Clone()
+				api.SetProxyURL(proxyURL)
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
