@@ -58,7 +58,9 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 		"baseURL", config.BaseURL,
 		"maxConcurrent", maxConcurrent,
 		"batchLimit", batchLimit,
-		"delay", delay)
+		"delay", delay,
+		"proxyPort", proxyPort,
+	)
 
 	// Create parent CFBatchApi
 	api := cfbatch_v2.NewCFBatchApi(config.BaseURL, config.Token)
@@ -88,7 +90,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				}
 				defer sem.Release(1)
 
-				log.Info("Worker started", "workerID", workerID, "proxyPort", proxyPort)
+				log.Info("Worker started", "workerID", workerID)
 
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -96,11 +98,10 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
-					log.Error("SendBatch failed", "workerID", workerID, "proxyPort", proxyPort, "error", err)
+					log.Error("SendBatch failed", "workerID", workerID, "error", err)
 				} else {
 					log.Info("SendBatch completed successfully",
 						"workerID", workerID,
-						"proxyPort", proxyPort,
 						"limit", batchLimit,
 						"responseCount", len(responses))
 
@@ -108,7 +109,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 					for i, response := range responses {
 						log.Info("Batch response",
 							"workerID", workerID,
-							"responseIndex", i,
+							"index", i,
 							"app", response.App,
 							"username", response.Username,
 							"status", response.Status,
