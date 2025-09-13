@@ -14,17 +14,18 @@ func main() {
 		batchB        = flag.Uint("b", 10, "Batch limit (shorthand)")
 		delay         = flag.Uint("delay", 1, "Delay between rounds in seconds")
 		delayD        = flag.Uint("d", 1, "Delay between rounds in seconds (shorthand)")
+		inputFile     = flag.String("i", "", "Input YAML config file")
 	)
 	flag.Parse()
 
 	// Use shorthand flags if they were explicitly set
 	finalConcurrent := *maxConcurrent
-	if *concurrentC != 1 {
+	if *concurrentC != 10 {
 		finalConcurrent = *concurrentC
 	}
 
 	finalBatch := *batchLimit
-	if *batchB != 1 {
+	if *batchB != 10 {
 		finalBatch = *batchB
 	}
 
@@ -33,5 +34,5 @@ func main() {
 		finalDelay = *delayD
 	}
 
-	batchproxy.Run(finalConcurrent, finalBatch, finalDelay)
+	batchproxy.Run(finalConcurrent, finalBatch, finalDelay, *inputFile)
 }

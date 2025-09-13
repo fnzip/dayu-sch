@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/goccy/go-yaml"
 	"golang.org/x/sync/semaphore"
 
 	cfbatch_v2 "dayusch/internal/pkg/api/cfbatch/v2"
@@ -17,27 +18,52 @@ const (
 	proxyPort = 823 // Sticky port with automatic rotation
 )
 
-func Run(maxConcurrent, batchLimit, delay uint) {
-	// Read environment variables
-	baseURL := os.Getenv("CFBATCH_URL")
-	token := os.Getenv("CFBATCH_TOKEN")
-	proxyUsername := os.Getenv("PROXY_USERNAME")
-	proxyPassword := os.Getenv("PROXY_PASSWORD")
+type Config struct {
+	BaseURL       string `yaml:"base_url"`
+	Token         string `yaml:"token"`
+	ProxyUsername string `yaml:"proxy_username"`
+	ProxyPassword string `yaml:"proxy_password"`
+}
 
-	if baseURL == "" || token == "" || proxyUsername == "" || proxyPassword == "" {
-		log.Fatal("Missing required environment variables: CFBATCH_URL, CFBATCH_TOKEN, PROXY_USERNAME, PROXY_PASSWORD")
+func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
+	var config Config
+
+	if inputFile != "" {
+		// Read and parse YAML config file
+		data, err := os.ReadFile(inputFile)
+		if err != nil {
+			log.Fatal("Failed to read config file", "file", inputFile, "error", err)
+		}
+
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			log.Fatal("Failed to parse YAML config", "file", inputFile, "error", err)
+		}
+
+		log.Info("Loaded config from file", "file", inputFile)
+	} else {
+		// Read environment variables (fallback)
+		config.BaseURL = os.Getenv("CFBATCH_URL")
+		config.Token = os.Getenv("CFBATCH_TOKEN")
+		config.ProxyUsername = os.Getenv("PROXY_USERNAME")
+		config.ProxyPassword = os.Getenv("PROXY_PASSWORD")
+
+		log.Info("Loaded config from environment variables")
+	}
+
+	if config.BaseURL == "" || config.Token == "" || config.ProxyUsername == "" || config.ProxyPassword == "" {
+		log.Fatal("Missing required configuration: base_url, token, proxy_username, proxy_password")
 	}
 
 	log.Info("Starting batchproxy",
-		"baseURL", baseURL,
+		"baseURL", config.BaseURL,
 		"maxConcurrent", maxConcurrent,
 		"batchLimit", batchLimit,
 		"delay", delay)
 
 	// Create parent CFBatchApi
-	api := cfbatch_v2.NewCFBatchApi(baseURL, token)
+	api := cfbatch_v2.NewCFBatchApi(config.BaseURL, config.Token)
 	// Construct proxy URL for dataimpulse with sticky port (auto-rotating)
-	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", proxyUsername, proxyPassword, proxyPort)
+	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxyPort)
 	api.SetProxyURL(proxyURL)
 
 	log.Info("Created parent CFBatchApi instance")
