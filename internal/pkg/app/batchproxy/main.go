@@ -70,7 +70,7 @@ func Run() {
 				log.Info("Worker started", "workerID", workerID, "proxyPort", port)
 
 				// Send batch request
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
 
 				err := api.SendBatch(ctx, batchLimit)
