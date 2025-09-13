@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	proxyPortStart = 10000
-	proxyPortEnd   = 19998
-	maxConcurrent  = 32
-	batchLimit     = 16 // adjust as needed
+	proxyPort     = 823 // Sticky port with automatic rotation
+	maxConcurrent = 1
+	batchLimit    = 1 // adjust as needed
 )
 
 func Run() {
@@ -34,23 +33,24 @@ func Run() {
 	log.Info("Starting batchproxy", "baseURL", baseURL)
 
 	// Create parent CFBatchApi
-	parentApi := cfbatch_v2.NewCFBatchApi(baseURL, token)
+	api := cfbatch_v2.NewCFBatchApi(baseURL, token)
+	// Construct proxy URL for dataimpulse with sticky port (auto-rotating)
+	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", proxyUsername, proxyPassword, proxyPort)
+	api.SetProxyURL(proxyURL)
+
 	log.Info("Created parent CFBatchApi instance")
 
-	// Initialize round robin proxy port
-	currentPort := proxyPortStart
-
 	for {
-		log.Info("Starting new batch round", "startingPort", currentPort)
+		log.Info("Starting new batch round")
 
 		// Create semaphore for controlling concurrency
 		sem := semaphore.NewWeighted(maxConcurrent)
 		var wg sync.WaitGroup
 
-		// Create 10 concurrent workers
+		// Create concurrent workers
 		for i := 0; i < maxConcurrent; i++ {
 			wg.Add(1)
-			go func(workerID int, port int) {
+			go func(workerID int) {
 				defer wg.Done()
 
 				// Acquire semaphore
@@ -60,14 +60,7 @@ func Run() {
 				}
 				defer sem.Release(1)
 
-				// Clone the parent API
-				api := parentApi.Clone()
-
-				// Construct proxy URL for dataimpulse
-				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", proxyUsername, proxyPassword, port)
-				api.SetProxyURL(proxyURL)
-
-				log.Info("Worker started", "workerID", workerID, "proxyPort", port)
+				log.Info("Worker started", "workerID", workerID, "proxyPort", proxyPort)
 
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -75,17 +68,11 @@ func Run() {
 
 				err := api.SendBatch(ctx, batchLimit)
 				if err != nil {
-					log.Error("SendBatch failed", "workerID", workerID, "proxyPort", port, "error", err)
+					log.Error("SendBatch failed", "workerID", workerID, "proxyPort", proxyPort, "error", err)
 				} else {
-					log.Info("SendBatch completed successfully", "workerID", workerID, "proxyPort", port, "limit", batchLimit)
+					log.Info("SendBatch completed successfully", "workerID", workerID, "proxyPort", proxyPort, "limit", batchLimit)
 				}
-			}(i, currentPort)
-
-			// Move to next port in round robin
-			currentPort++
-			if currentPort > proxyPortEnd {
-				currentPort = proxyPortStart
-			}
+			}(i)
 		}
 
 		// Wait for all workers to complete
@@ -94,6 +81,6 @@ func Run() {
 		log.Info("All workers completed, starting next round")
 
 		// Optional: add a small delay between rounds
-		// time.Sleep(1 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }
