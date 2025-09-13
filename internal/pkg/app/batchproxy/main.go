@@ -94,11 +94,27 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
 
-				err := api.SendBatch(ctx, int(batchLimit))
+				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
 					log.Error("SendBatch failed", "workerID", workerID, "proxyPort", proxyPort, "error", err)
 				} else {
-					log.Info("SendBatch completed successfully", "workerID", workerID, "proxyPort", proxyPort, "limit", batchLimit)
+					log.Info("SendBatch completed successfully",
+						"workerID", workerID,
+						"proxyPort", proxyPort,
+						"limit", batchLimit,
+						"responseCount", len(responses))
+
+					// Print each response
+					for i, response := range responses {
+						log.Info("Batch response",
+							"workerID", workerID,
+							"responseIndex", i,
+							"app", response.App,
+							"username", response.Username,
+							"status", response.Status,
+							"balance", response.Result.Balance,
+							"coin", response.Result.Coin)
+					}
 				}
 			}(i)
 		}
