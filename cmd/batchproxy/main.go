@@ -2,8 +2,36 @@ package main
 
 import (
 	"dayusch/internal/pkg/app/batchproxy"
+	"flag"
 )
 
 func main() {
-	batchproxy.Run()
+	// Parse command line flags
+	var (
+		maxConcurrent = flag.Uint("concurrent", 10, "Number of concurrent workers")
+		concurrentC   = flag.Uint("c", 10, "Number of concurrent workers (shorthand)")
+		batchLimit    = flag.Uint("batch", 10, "Batch limit")
+		batchB        = flag.Uint("b", 10, "Batch limit (shorthand)")
+		delay         = flag.Uint("delay", 1, "Delay between rounds in seconds")
+		delayD        = flag.Uint("d", 1, "Delay between rounds in seconds (shorthand)")
+	)
+	flag.Parse()
+
+	// Use shorthand flags if they were explicitly set
+	finalConcurrent := *maxConcurrent
+	if *concurrentC != 1 {
+		finalConcurrent = *concurrentC
+	}
+
+	finalBatch := *batchLimit
+	if *batchB != 1 {
+		finalBatch = *batchB
+	}
+
+	finalDelay := *delay
+	if *delayD != 1 {
+		finalDelay = *delayD
+	}
+
+	batchproxy.Run(finalConcurrent, finalBatch, finalDelay)
 }

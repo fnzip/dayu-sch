@@ -14,12 +14,10 @@ import (
 )
 
 const (
-	proxyPort     = 823 // Sticky port with automatic rotation
-	maxConcurrent = 1
-	batchLimit    = 1 // adjust as needed
+	proxyPort = 823 // Sticky port with automatic rotation
 )
 
-func Run() {
+func Run(maxConcurrent, batchLimit, delay uint) {
 	// Read environment variables
 	baseURL := os.Getenv("CFBATCH_URL")
 	token := os.Getenv("CFBATCH_TOKEN")
@@ -30,7 +28,11 @@ func Run() {
 		log.Fatal("Missing required environment variables: CFBATCH_URL, CFBATCH_TOKEN, PROXY_USERNAME, PROXY_PASSWORD")
 	}
 
-	log.Info("Starting batchproxy", "baseURL", baseURL)
+	log.Info("Starting batchproxy",
+		"baseURL", baseURL,
+		"maxConcurrent", maxConcurrent,
+		"batchLimit", batchLimit,
+		"delay", delay)
 
 	// Create parent CFBatchApi
 	api := cfbatch_v2.NewCFBatchApi(baseURL, token)
@@ -44,11 +46,11 @@ func Run() {
 		log.Info("Starting new batch round")
 
 		// Create semaphore for controlling concurrency
-		sem := semaphore.NewWeighted(maxConcurrent)
+		sem := semaphore.NewWeighted(int64(maxConcurrent))
 		var wg sync.WaitGroup
 
 		// Create concurrent workers
-		for i := 0; i < maxConcurrent; i++ {
+		for i := 0; i < int(maxConcurrent); i++ {
 			wg.Add(1)
 			go func(workerID int) {
 				defer wg.Done()
@@ -66,7 +68,7 @@ func Run() {
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
 
-				err := api.SendBatch(ctx, batchLimit)
+				err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
 					log.Error("SendBatch failed", "workerID", workerID, "proxyPort", proxyPort, "error", err)
 				} else {
@@ -81,6 +83,6 @@ func Run() {
 		log.Info("All workers completed, starting next round")
 
 		// Optional: add a small delay between rounds
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Duration(delay) * time.Second)
 	}
 }
