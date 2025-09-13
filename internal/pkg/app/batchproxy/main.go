@@ -107,14 +107,25 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 					// Print each response
 					for i, response := range responses {
-						log.Info("Batch response",
-							"workerID", workerID,
-							"index", i,
-							"app", response.App,
-							"username", response.Username,
-							"status", response.Status,
-							"balance", response.Result.Balance,
-							"coin", response.Result.Coin)
+						if response.Result != nil {
+							log.Info("Batch response",
+								"workerID", workerID,
+								"i", i,
+								"a", response.App,
+								"u", response.Username,
+								"s", response.Status,
+								"b", response.Result.Balance,
+								"c", response.Result.Coin)
+						} else {
+							log.Info("Batch response",
+								"workerID", workerID,
+								"i", i,
+								"a", response.App,
+								"u", response.Username,
+								"s", response.Status,
+								"b", "nil",
+								"c", "nil")
+						}
 					}
 				}
 			}(i)

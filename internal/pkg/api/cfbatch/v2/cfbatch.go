@@ -17,10 +17,10 @@ type BatchResult struct {
 }
 
 type BatchResponse struct {
-	App      string      `json:"a"` // a = app
-	Username string      `json:"u"` // u = username
-	Status   bool        `json:"s"` // s = status
-	Result   BatchResult `json:"r"` // r = result
+	App      string       `json:"a"` // a = app
+	Username string       `json:"u"` // u = username
+	Status   bool         `json:"s"` // s = status
+	Result   *BatchResult `json:"r"` // r = result (can be null)
 }
 
 func NewCFBatchApi(baseUrl, token string) *CFBatchApi {
