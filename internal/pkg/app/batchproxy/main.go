@@ -16,7 +16,7 @@ import (
 const (
 	proxyPortStart = 10000
 	proxyPortEnd   = 19998
-	maxConcurrent  = 10
+	maxConcurrent  = 32
 	batchLimit     = 16 // adjust as needed
 )
 
