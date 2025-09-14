@@ -133,28 +133,27 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", proxyPort, "userAgent", userAgent[:16]+"...")
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
+				shouldBlockProxy := false
+
 				if err != nil {
 					log.Error("SendBatch failed", "workerID", workerID, "port", proxyPort, "error", err)
-
-					// Block the proxy that failed
-					blockCtx, blockCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					proxyID := fmt.Sprintf("port_%d", proxyPort) // Assuming proxy ID format
-					_, blockErr := yarunClient.BlockProxy(blockCtx, proxyID)
-					blockCancel()
-
-					if blockErr != nil {
-						log.Error("Failed to block proxy", "workerID", workerID, "port", proxyPort, "error", blockErr)
-					} else {
-						log.Info("Proxy blocked due to failure", "workerID", workerID, "port", proxyPort)
-					}
+					shouldBlockProxy = true
 				} else {
 					log.Info("SendBatch completed successfully",
 						"workerID", workerID,
 						"limit", batchLimit,
 						"responseCount", len(responses))
 
-					// Print each response
+					// Analyze response status to determine if proxy should be blocked
+					var failedCount int
+					totalCount := len(responses)
+
+					// Print each response and count failures
 					for i, response := range responses {
+						if !response.Status {
+							failedCount++
+						}
+
 						if response.Result != nil {
 							log.Info("Batch response",
 								"workerID", workerID,
@@ -174,6 +173,43 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 								"b", "nil",
 								"c", "nil")
 						}
+					}
+
+					// Check if failure rate is >= 50%
+					if totalCount > 0 {
+						failureRate := float64(failedCount) / float64(totalCount)
+						log.Info("Batch response analysis",
+							"workerID", workerID,
+							"totalResponses", totalCount,
+							"failedResponses", failedCount,
+							"failureRate", fmt.Sprintf("%.2f%%", failureRate*100))
+
+						if failureRate >= 0.5 {
+							shouldBlockProxy = true
+							log.Warn("High failure rate detected, will block proxy",
+								"workerID", workerID,
+								"port", proxyPort,
+								"failureRate", fmt.Sprintf("%.2f%%", failureRate*100))
+						}
+					}
+				}
+
+				// Block proxy if needed (either due to API error or high failure rate)
+				if shouldBlockProxy {
+					blockCtx, blockCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					proxyID := fmt.Sprintf("port_%d", proxyPort) // Assuming proxy ID format
+					_, blockErr := yarunClient.BlockProxy(blockCtx, proxyID)
+					blockCancel()
+
+					if blockErr != nil {
+						log.Error("Failed to block proxy", "workerID", workerID, "port", proxyPort, "error", blockErr)
+					} else {
+						log.Info("Proxy blocked", "workerID", workerID, "port", proxyPort, "reason", func() string {
+							if err != nil {
+								return "API error"
+							}
+							return "high failure rate (>=50%)"
+						}())
 					}
 				}
 			}(i, proxy.Port)

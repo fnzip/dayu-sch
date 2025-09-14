@@ -1,19 +1,16 @@
 package yarun
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/imroc/req/v3"
 )
 
 // YarunApi represents the yarun API client
 type YarunApi struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	client *req.Client
 }
 
 // ProxyResponse represents a proxy object
@@ -40,40 +37,33 @@ type BlockProxyResponse struct {
 
 // NewYarunApi creates a new yarun API client
 func NewYarunApi(baseURL, token string) *YarunApi {
+	client := req.C().
+		SetBaseURL(baseURL).
+		SetCommonHeader("x-token", token).
+		SetCommonHeader("Content-Type", "application/json").
+		SetTimeout(30 * time.Second)
+
 	return &YarunApi{
-		baseURL: baseURL,
-		token:   token,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: client,
 	}
 }
 
 // GetProxies gets n proxies from the API with round robin functionality
 func (y *YarunApi) GetProxies(ctx context.Context, limit int) (*GetProxiesResponse, error) {
-	url := fmt.Sprintf("%s/proxy?limit=%d", y.baseURL, limit)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("x-token", y.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := y.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
 	var response GetProxiesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+
+	resp, err := y.client.R().
+		SetContext(ctx).
+		SetQueryParam("limit", strconv.Itoa(limit)).
+		SetSuccessResult(&response).
+		Get("/proxy")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, resp.Err
 	}
 
 	return &response, nil
@@ -81,38 +71,24 @@ func (y *YarunApi) GetProxies(ctx context.Context, limit int) (*GetProxiesRespon
 
 // BlockProxy sets a 1-hour cooldown on a specific proxy
 func (y *YarunApi) BlockProxy(ctx context.Context, proxyID string) (*BlockProxyResponse, error) {
-	url := fmt.Sprintf("%s/proxy/blocked", y.baseURL)
-
 	request := BlockProxyRequest{
 		ID: proxyID,
 	}
 
-	jsonData, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("x-token", y.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := y.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
 	var response BlockProxyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+
+	resp, err := y.client.R().
+		SetContext(ctx).
+		SetBodyJsonMarshal(request).
+		SetSuccessResult(&response).
+		Post("/proxy/blocked")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, resp.Err
 	}
 
 	return &response, nil
