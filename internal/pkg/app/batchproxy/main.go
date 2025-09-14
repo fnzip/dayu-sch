@@ -104,7 +104,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 			}
 
 			wg.Add(1)
-			go func(workerID int, proxyPort int) {
+			go func(workerID int, proxy yarun.ProxyResponse) {
 				defer wg.Done()
 
 				// Acquire semaphore
@@ -114,7 +114,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				}
 				defer sem.Release(1)
 
-				log.Info("Worker started", "workerID", workerID, "assignedPort", proxyPort)
+				log.Info("Worker started", "workerID", workerID, "assignedPort", proxy.Port)
 
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -127,16 +127,16 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				api.SetUserAgent(userAgent)
 
 				// Then set proxy URL
-				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxyPort)
+				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxy.Port)
 				api.SetProxyURL(proxyURL)
 
-				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", proxyPort, "userAgent", userAgent[:16]+"...")
+				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", proxy.Port, "userAgent", userAgent[:16]+"...")
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				shouldBlockProxy := false
 
 				if err != nil {
-					log.Error("SendBatch failed", "workerID", workerID, "port", proxyPort, "error", err)
+					log.Error("SendBatch failed", "workerID", workerID, "port", proxy.Port, "error", err)
 					shouldBlockProxy = true
 				} else {
 					log.Info("SendBatch completed successfully",
@@ -188,7 +188,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 							shouldBlockProxy = true
 							log.Warn("High failure rate detected, will block proxy",
 								"workerID", workerID,
-								"port", proxyPort,
+								"port", proxy.Port,
 								"failureRate", fmt.Sprintf("%.2f%%", failureRate*100))
 						}
 					}
@@ -197,14 +197,13 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				// Block proxy if needed (either due to API error or high failure rate)
 				if shouldBlockProxy {
 					blockCtx, blockCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					proxyID := fmt.Sprintf("port_%d", proxyPort) // Assuming proxy ID format
-					_, blockErr := yarunClient.BlockProxy(blockCtx, proxyID)
+					_, blockErr := yarunClient.BlockProxy(blockCtx, proxy.ID)
 					blockCancel()
 
 					if blockErr != nil {
-						log.Error("Failed to block proxy", "workerID", workerID, "port", proxyPort, "error", blockErr)
+						log.Error("Failed to block proxy", "workerID", workerID, "port", proxy.Port, "error", blockErr)
 					} else {
-						log.Info("Proxy blocked", "workerID", workerID, "port", proxyPort, "reason", func() string {
+						log.Info("Proxy blocked", "workerID", workerID, "port", proxy.Port, "reason", func() string {
 							if err != nil {
 								return "API error"
 							}
@@ -212,7 +211,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						}())
 					}
 				}
-			}(i, proxy.Port)
+			}(i, proxy)
 		}
 
 		// Wait for all workers to complete

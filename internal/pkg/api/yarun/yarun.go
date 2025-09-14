@@ -15,6 +15,7 @@ type YarunApi struct {
 
 // ProxyResponse represents a proxy object
 type ProxyResponse struct {
+	ID        string    `json:"_id"`
 	Port      int       `json:"port"`
 	ReleaseAt time.Time `json:"release_at"`
 }
@@ -27,7 +28,7 @@ type GetProxiesResponse struct {
 
 // BlockProxyRequest represents the request to block a proxy
 type BlockProxyRequest struct {
-	ID string `json:"id"`
+	ID string `json:"_id"`
 }
 
 // BlockProxyResponse represents the response from POST /proxy/blocked
@@ -42,6 +43,8 @@ func NewYarunApi(baseURL, token string) *YarunApi {
 		SetCommonHeader("x-token", token).
 		SetCommonHeader("Content-Type", "application/json").
 		SetTimeout(30 * time.Second)
+
+	// client.DevMode()
 
 	return &YarunApi{
 		client: client,
