@@ -26,7 +26,6 @@ type BatchResponse struct {
 func NewCFBatchApi(baseUrl, token string) *CFBatchApi {
 	client := req.C().
 		SetCommonHeader("x-token", token).
-		SetCommonHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36").
 		SetBaseURL(baseUrl)
 
 	// client.DevMode()
@@ -44,6 +43,10 @@ func (a *CFBatchApi) Clone() *CFBatchApi {
 
 func (a *CFBatchApi) SetProxyURL(proxyURL string) {
 	a.client.SetProxyURL(proxyURL)
+}
+
+func (a *CFBatchApi) SetUserAgent(ua string) {
+	a.client.SetCommonHeader("User-Agent", ua)
 }
 
 func (a *CFBatchApi) SendBatch(ctx context.Context, limit int) ([]BatchResponse, error) {

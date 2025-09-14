@@ -100,10 +100,16 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				defer cancel()
 
 				api := parentApi.Clone()
+
+				// Set user agent first (round-robin)
+				userAgent := GetNextUserAgent()
+				api.SetUserAgent(userAgent)
+
+				// Then set proxy URL
 				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, port)
 				api.SetProxyURL(proxyURL)
 
-				log.Info("Proxy URL set", "workerID", workerID, "port", port)
+				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", port, "userAgent", userAgent[:50]+"...")
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
