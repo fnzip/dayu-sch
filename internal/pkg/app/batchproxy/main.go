@@ -3,7 +3,6 @@ package batchproxy
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -16,8 +15,7 @@ import (
 )
 
 const (
-	proxyPortStart = 10000 // Start of port range
-	proxyPortEnd   = 19998 // End of port range
+	proxyPort = 823 // Sticky port with automatic rotation
 )
 
 type Config struct {
@@ -61,20 +59,17 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 		"maxConcurrent", maxConcurrent,
 		"batchLimit", batchLimit,
 		"delay", delay,
-		"proxyPortRange", fmt.Sprintf("%d-%d", proxyPortStart, proxyPortEnd),
+		"proxyPort", proxyPort,
 	)
 
 	// Create parent CFBatchApi
+	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxyPort)
 	parentApi := cfbatch_v2.NewCFBatchApi(config.BaseURL, config.Token)
 
-	// Initialize random starting port
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	currentPort := proxyPortStart + r.Intn(proxyPortEnd-proxyPortStart+1)
-
-	log.Info("Created parent CFBatchApi instance", "startingPort", currentPort)
+	log.Info("Created parent CFBatchApi instance")
 
 	for {
-		log.Info("Starting new batch round", "startingPort", currentPort)
+		log.Info("Starting new batch round")
 
 		// Create semaphore for controlling concurrency
 		sem := semaphore.NewWeighted(int64(maxConcurrent))
@@ -83,7 +78,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 		// Create concurrent workers
 		for i := 0; i < int(maxConcurrent); i++ {
 			wg.Add(1)
-			go func(workerID int, port int) {
+			go func(workerID int) {
 				defer wg.Done()
 
 				// Acquire semaphore
@@ -93,21 +88,18 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				}
 				defer sem.Release(1)
 
-				log.Info("Worker started", "workerID", workerID, "assignedPort", port)
+				log.Info("Worker started", "workerID", workerID)
 
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
 
 				api := parentApi.Clone()
-				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, port)
 				api.SetProxyURL(proxyURL)
-
-				log.Info("Proxy URL set", "workerID", workerID, "port", port)
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
-					log.Error("SendBatch failed", "workerID", workerID, "port", port, "error", err)
+					log.Error("SendBatch failed", "workerID", workerID, "error", err)
 				} else {
 					log.Info("SendBatch completed successfully",
 						"workerID", workerID,
@@ -137,13 +129,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						}
 					}
 				}
-			}(i, currentPort)
-
-			// Move to next port in round robin
-			currentPort++
-			if currentPort > proxyPortEnd {
-				currentPort = proxyPortStart
-			}
+			}(i)
 		}
 
 		// Wait for all workers to complete
