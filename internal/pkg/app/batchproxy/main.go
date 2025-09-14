@@ -109,7 +109,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, port)
 				api.SetProxyURL(proxyURL)
 
-				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", port, "userAgent", userAgent[:50]+"...")
+				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", port, "userAgent", userAgent[:16]+"...")
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
