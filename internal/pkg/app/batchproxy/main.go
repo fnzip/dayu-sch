@@ -3,7 +3,6 @@ package batchproxy
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -13,11 +12,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	cfbatch "dayusch/internal/pkg/api/cfbatch/v2"
-)
-
-const (
-	proxyPortStart = 10000 // Start of port range
-	proxyPortEnd   = 19998 // End of port range
+	"dayusch/internal/pkg/api/yarun"
 )
 
 type Config struct {
@@ -25,6 +20,8 @@ type Config struct {
 	Token         string `yaml:"token"`
 	ProxyUsername string `yaml:"proxy_username"`
 	ProxyPassword string `yaml:"proxy_password"`
+	YarunBaseURL  string `yaml:"yarun_base_url"`
+	YarunToken    string `yaml:"yarun_token"`
 }
 
 func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
@@ -48,42 +45,66 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 		config.Token = os.Getenv("CFBATCH_TOKEN")
 		config.ProxyUsername = os.Getenv("PROXY_USERNAME")
 		config.ProxyPassword = os.Getenv("PROXY_PASSWORD")
+		config.YarunBaseURL = os.Getenv("YARUN_BASE_URL")
+		config.YarunToken = os.Getenv("YARUN_TOKEN")
 
 		log.Info("Loaded config from environment variables")
 	}
 
-	if config.BaseURL == "" || config.Token == "" || config.ProxyUsername == "" || config.ProxyPassword == "" {
-		log.Fatal("Missing required configuration: base_url, token, proxy_username, proxy_password")
+	if config.BaseURL == "" || config.Token == "" || config.ProxyUsername == "" || config.ProxyPassword == "" || config.YarunBaseURL == "" || config.YarunToken == "" {
+		log.Fatal("Missing required configuration: base_url, token, proxy_username, proxy_password, yarun_base_url, yarun_token")
 	}
 
 	log.Info("Starting batchproxy",
 		"baseURL", config.BaseURL,
+		"yarunBaseURL", config.YarunBaseURL,
 		"maxConcurrent", maxConcurrent,
 		"batchLimit", batchLimit,
 		"delay", delay,
-		"proxyPortRange", fmt.Sprintf("%d-%d", proxyPortStart, proxyPortEnd),
 	)
 
 	// Create parent CFBatchApi
 	parentApi := cfbatch.NewCFBatchApi(config.BaseURL, config.Token)
 
-	// Initialize random starting port
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	currentPort := proxyPortStart + r.Intn(proxyPortEnd-proxyPortStart+1)
+	// Create yarun API client
+	yarunClient := yarun.NewYarunApi(config.YarunBaseURL, config.YarunToken)
 
-	log.Info("Created parent CFBatchApi instance", "startingPort", currentPort)
+	log.Info("Created parent CFBatchApi and yarun client instances")
 
 	for {
-		log.Info("Starting new batch round", "startingPort", currentPort)
+		log.Info("Starting new batch round")
+
+		// Get available proxies from yarun
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		proxiesResp, err := yarunClient.GetProxies(ctx, int(maxConcurrent))
+		cancel()
+
+		if err != nil {
+			log.Error("Failed to get proxies from yarun", "error", err)
+			time.Sleep(time.Duration(delay) * time.Second)
+			continue
+		}
+
+		if len(proxiesResp.Proxies) == 0 {
+			log.Warn("No available proxies returned from yarun")
+			time.Sleep(time.Duration(delay) * time.Second)
+			continue
+		}
+
+		log.Info("Got proxies from yarun", "count", len(proxiesResp.Proxies))
 
 		// Create semaphore for controlling concurrency
 		sem := semaphore.NewWeighted(int64(maxConcurrent))
 		var wg sync.WaitGroup
 
-		// Create concurrent workers
-		for i := 0; i < int(maxConcurrent); i++ {
+		// Create concurrent workers using available proxies
+		for i, proxy := range proxiesResp.Proxies {
+			if i >= int(maxConcurrent) {
+				break // Don't exceed maxConcurrent
+			}
+
 			wg.Add(1)
-			go func(workerID int, port int) {
+			go func(workerID int, proxyPort int) {
 				defer wg.Done()
 
 				// Acquire semaphore
@@ -93,7 +114,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				}
 				defer sem.Release(1)
 
-				log.Info("Worker started", "workerID", workerID, "assignedPort", port)
+				log.Info("Worker started", "workerID", workerID, "assignedPort", proxyPort)
 
 				// Send batch request
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -106,14 +127,26 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				api.SetUserAgent(userAgent)
 
 				// Then set proxy URL
-				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, port)
+				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxyPort)
 				api.SetProxyURL(proxyURL)
 
-				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", port, "userAgent", userAgent[:16]+"...")
+				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", proxyPort, "userAgent", userAgent[:16]+"...")
 
 				responses, err := api.SendBatch(ctx, int(batchLimit))
 				if err != nil {
-					log.Error("SendBatch failed", "workerID", workerID, "port", port, "error", err)
+					log.Error("SendBatch failed", "workerID", workerID, "port", proxyPort, "error", err)
+
+					// Block the proxy that failed
+					blockCtx, blockCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					proxyID := fmt.Sprintf("port_%d", proxyPort) // Assuming proxy ID format
+					_, blockErr := yarunClient.BlockProxy(blockCtx, proxyID)
+					blockCancel()
+
+					if blockErr != nil {
+						log.Error("Failed to block proxy", "workerID", workerID, "port", proxyPort, "error", blockErr)
+					} else {
+						log.Info("Proxy blocked due to failure", "workerID", workerID, "port", proxyPort)
+					}
 				} else {
 					log.Info("SendBatch completed successfully",
 						"workerID", workerID,
@@ -143,13 +176,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						}
 					}
 				}
-			}(i, currentPort)
-
-			// Move to next port in round robin
-			currentPort++
-			if currentPort > proxyPortEnd {
-				currentPort = proxyPortStart
-			}
+			}(i, proxy.Port)
 		}
 
 		// Wait for all workers to complete
