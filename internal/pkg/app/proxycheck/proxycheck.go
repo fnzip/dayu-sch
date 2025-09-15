@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"dayusch/internal/pkg/api/yarun"
 
 	"github.com/charmbracelet/log"
+	"golang.org/x/sync/semaphore"
 )
 
 // ProxyChecker handles proxy checking operations
@@ -23,6 +25,7 @@ type ProxyChecker struct {
 	httpClient    *http.Client
 	proxyUsername *string
 	proxyPassword *string
+	semaphore     *semaphore.Weighted
 }
 
 // IPifyResponse represents the response from ipify API
@@ -46,6 +49,7 @@ func NewProxyChecker(yarunURL, yarunToken, proxyUsername, proxyPassword string, 
 		},
 		proxyUsername: &proxyUsername,
 		proxyPassword: &proxyPassword,
+		semaphore:     semaphore.NewWeighted(10), // Allow up to 10 concurrent proxy checks
 	}
 }
 
@@ -72,28 +76,38 @@ func (pc *ProxyChecker) CheckProxies(ctx context.Context) error {
 
 	log.Info("Found blocked proxies to check", "count", len(blockedResp.Proxies))
 
-	for i, proxy := range blockedResp.Proxies {
-		// Check if context is cancelled before processing each proxy
+	var wg sync.WaitGroup
+
+	for _, proxy := range blockedResp.Proxies {
+		// Check if context is cancelled before starting new goroutine
 		select {
 		case <-ctx.Done():
-			log.Info("Context cancelled, stopping proxy checks", "checked", i, "total", len(blockedResp.Proxies))
+			log.Info("Context cancelled, waiting for remaining goroutines to complete")
+			wg.Wait()
 			return ctx.Err()
 		default:
 		}
 
-		if err := pc.checkSingleProxy(ctx, proxy); err != nil {
-			log.Error("Error checking proxy", "id", proxy.ID, "port", proxy.Port, "error", err)
+		// Acquire semaphore permit
+		if err := pc.semaphore.Acquire(ctx, 1); err != nil {
+			log.Info("Context cancelled while acquiring semaphore, waiting for remaining goroutines to complete")
+			wg.Wait()
+			return ctx.Err()
 		}
 
-		// Add small delay between proxy checks to avoid overwhelming the system
-		// But make it interruptible
-		select {
-		case <-ctx.Done():
-			log.Info("Context cancelled during delay", "checked", i+1, "total", len(blockedResp.Proxies))
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
+		wg.Add(1)
+		go func(proxy yarun.ProxyResponse) {
+			defer wg.Done()
+			defer pc.semaphore.Release(1)
+
+			if err := pc.checkSingleProxy(ctx, proxy); err != nil {
+				log.Error("Error checking proxy", "id", proxy.ID, "port", proxy.Port, "error", err)
+			}
+		}(proxy)
 	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
 
 	return nil
 }
