@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -32,10 +31,7 @@ type IPifyResponse struct {
 }
 
 // NewProxyChecker creates a new proxy checker instance
-func NewProxyChecker(yarunURL, yarunToken string, limit int) *ProxyChecker {
-	proxyUsername := os.Getenv("PROXY_USERNAME")
-	proxyPassword := os.Getenv("PROXY_PASSWORD")
-
+func NewProxyChecker(yarunURL, yarunToken, proxyUsername, proxyPassword string, limit int) *ProxyChecker {
 	return &ProxyChecker{
 		yarunAPI: yarun.NewYarunApi(yarunURL, yarunToken),
 		limit:    limit,
@@ -74,26 +70,26 @@ func (pc *ProxyChecker) CheckProxies(ctx context.Context) error {
 		return fmt.Errorf("API returned not ok for blocked proxies")
 	}
 
-	log.Printf("Found %d blocked proxies to check", len(blockedResp.Proxies))
+	log.Info("Found blocked proxies to check", "count", len(blockedResp.Proxies))
 
 	for i, proxy := range blockedResp.Proxies {
 		// Check if context is cancelled before processing each proxy
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled, stopping after checking %d/%d proxies", i, len(blockedResp.Proxies))
+			log.Info("Context cancelled, stopping proxy checks", "checked", i, "total", len(blockedResp.Proxies))
 			return ctx.Err()
 		default:
 		}
 
 		if err := pc.checkSingleProxy(ctx, proxy); err != nil {
-			log.Printf("Error checking proxy %s:%d - %v", proxy.ID, proxy.Port, err)
+			log.Error("Error checking proxy", "id", proxy.ID, "port", proxy.Port, "error", err)
 		}
 
 		// Add small delay between proxy checks to avoid overwhelming the system
 		// But make it interruptible
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled during delay, stopping after checking %d/%d proxies", i+1, len(blockedResp.Proxies))
+			log.Info("Context cancelled during delay", "checked", i+1, "total", len(blockedResp.Proxies))
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
@@ -104,7 +100,7 @@ func (pc *ProxyChecker) CheckProxies(ctx context.Context) error {
 
 // checkSingleProxy checks a single proxy for IP changes and accessibility
 func (pc *ProxyChecker) checkSingleProxy(ctx context.Context, proxy yarun.ProxyResponse) error {
-	log.Printf("Checking proxy %s:%d (current IP: %s)", proxy.ID, proxy.Port, proxy.IP)
+	log.Info("Checking proxy", "id", proxy.ID, "port", proxy.Port, "current_ip", proxy.IP)
 
 	// Create proxy client
 	proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", *pc.proxyUsername, *pc.proxyPassword, proxy.Port)
@@ -128,36 +124,36 @@ func (pc *ProxyChecker) checkSingleProxy(ctx context.Context, proxy yarun.ProxyR
 	// Check current IP
 	currentIP, err := pc.getCurrentIP(ctx, proxyClient)
 	if err != nil {
-		log.Printf("Failed to get current IP for proxy %s:%d - %v", proxy.ID, proxy.Port, err)
+		log.Error("Failed to get current IP for proxy", "id", proxy.ID, "port", proxy.Port, "error", err)
 		// If we can't get IP, assume it's still blocked and update last check
 		return pc.updateProxyLastCheck(ctx, proxy.ID, proxy.IP)
 	}
 
 	// If IP has changed, unblock the proxy
 	if currentIP != proxy.IP {
-		log.Printf("Proxy %s:%d IP changed from %s to %s - unblocking", proxy.ID, proxy.Port, proxy.IP, currentIP)
+		log.Info("Proxy IP changed, unblocking", "id", proxy.ID, "port", proxy.Port, "old_ip", proxy.IP, "new_ip", currentIP)
 		_, err := pc.yarunAPI.UnblockProxy(ctx, proxy.ID, currentIP, false)
 		if err != nil {
 			return fmt.Errorf("failed to unblock proxy: %w", err)
 		}
-		log.Printf("Successfully unblocked proxy %s:%d with new IP %s", proxy.ID, proxy.Port, currentIP)
+		log.Info("Successfully unblocked proxy with new IP", "id", proxy.ID, "port", proxy.Port, "new_ip", currentIP)
 		return nil
 	}
 
 	// IP is the same, check if the proxy is accessible
 	isBlocked := pc.checkProxyBlocked(ctx, proxyClient)
 	if isBlocked {
-		log.Printf("Proxy %s:%d is still blocked, updating last check", proxy.ID, proxy.Port)
+		log.Info("Proxy is still blocked, updating last check", "id", proxy.ID, "port", proxy.Port)
 		return pc.updateProxyLastCheck(ctx, proxy.ID, proxy.IP)
 	}
 
 	// Proxy is accessible, unblock it
-	log.Printf("Proxy %s:%d is now accessible - unblocking", proxy.ID, proxy.Port)
+	log.Info("Proxy is now accessible, unblocking", "id", proxy.ID, "port", proxy.Port)
 	_, err = pc.yarunAPI.UnblockProxy(ctx, proxy.ID, proxy.IP, false)
 	if err != nil {
 		return fmt.Errorf("failed to unblock proxy: %w", err)
 	}
-	log.Printf("Successfully unblocked accessible proxy %s:%d", proxy.ID, proxy.Port)
+	log.Info("Successfully unblocked accessible proxy", "id", proxy.ID, "port", proxy.Port)
 	return nil
 }
 
@@ -205,33 +201,33 @@ func (pc *ProxyChecker) checkProxyBlocked(ctx context.Context, client *http.Clie
 func (pc *ProxyChecker) isURLBlocked(ctx context.Context, client *http.Client, testURL string) bool {
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
-		log.Printf("Failed to create request for %s: %v", testURL, err)
+		log.Error("Failed to create request", "url", testURL, "error", err)
 		return false
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Failed to fetch %s: %v", testURL, err)
+		log.Error("Failed to fetch URL", "url", testURL, "error", err)
 		return true // Assume blocked if we can't reach it
 	}
 	defer resp.Body.Close()
 
 	// Check if status is not 200
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("URL %s returned status %d - considering blocked", testURL, resp.StatusCode)
+		log.Warn("URL returned non-200 status, considering blocked", "url", testURL, "status", resp.StatusCode)
 		return true
 	}
 
 	// Read response body to check for errorOccurPath
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Failed to read response body for %s: %v", testURL, err)
+		log.Error("Failed to read response body", "url", testURL, "error", err)
 		return false
 	}
 
 	bodyStr := string(body)
 	if strings.Contains(bodyStr, "errorOccurPath") {
-		log.Printf("URL %s contains 'errorOccurPath' - blocked", testURL)
+		log.Warn("URL contains errorOccurPath, blocked", "url", testURL)
 		return true
 	}
 

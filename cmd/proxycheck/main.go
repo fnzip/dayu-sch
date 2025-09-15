@@ -4,21 +4,24 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"dayusch/internal/pkg/app/proxycheck"
+
+	"github.com/charmbracelet/log"
 )
 
 func main() {
 	var (
-		yarunURL   = flag.String("yarun-url", "", "Yarun API base URL")
-		yarunToken = flag.String("yarun-token", "", "Yarun API token")
-		interval   = flag.Duration("interval", 5*time.Second, "Check interval")
-		limit      = flag.Int("limit", 32, "Limit of blocked proxies to check")
+		yarunURL      = flag.String("yarun-url", "", "Yarun API base URL")
+		yarunToken    = flag.String("yarun-token", "", "Yarun API token")
+		proxyUsername = flag.String("proxy-username", "", "Proxy username")
+		proxyPassword = flag.String("proxy-password", "", "Proxy password")
+		interval      = flag.Duration("interval", 5*time.Second, "Check interval")
+		limit         = flag.Int("limit", 32, "Limit of blocked proxies to check")
 	)
 	flag.Parse()
 
@@ -29,7 +32,7 @@ func main() {
 	}
 
 	// Create proxy checker
-	checker := proxycheck.NewProxyChecker(*yarunURL, *yarunToken, *limit)
+	checker := proxycheck.NewProxyChecker(*yarunURL, *yarunToken, *proxyUsername, *proxyPassword, *limit)
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -40,12 +43,12 @@ func main() {
 
 	go func() {
 		<-c
-		log.Println("Received shutdown signal, stopping...")
+		log.Info("Received shutdown signal, stopping...")
 		cancel()
 	}()
 
-	log.Printf("Starting proxy checker with interval %v, limit %d", *interval, *limit)
-	log.Printf("Yarun API: %s", *yarunURL)
+	log.Info("Starting proxy checker", "interval", *interval, "limit", *limit)
+	log.Info("Yarun API configured", "url", *yarunURL)
 
 	// Start the checking loop
 	ticker := time.NewTicker(*interval)
@@ -53,18 +56,18 @@ func main() {
 
 	// Run initial check
 	if err := checker.CheckProxies(ctx); err != nil {
-		log.Printf("Initial check failed: %v", err)
+		log.Error("Initial check failed", "error", err)
 	}
 
 	// Continue checking at intervals
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Shutting down proxy checker")
+			log.Info("Shutting down proxy checker")
 			return
 		case <-ticker.C:
 			if err := checker.CheckProxies(ctx); err != nil {
-				log.Printf("Check failed: %v", err)
+				log.Error("Check failed", "error", err)
 			}
 		}
 	}
