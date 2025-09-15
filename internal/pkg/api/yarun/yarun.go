@@ -15,13 +15,22 @@ type YarunApi struct {
 
 // ProxyResponse represents a proxy object
 type ProxyResponse struct {
-	ID        string    `json:"_id"`
-	Port      int       `json:"port"`
-	ReleaseAt time.Time `json:"release_at"`
+	ID          string    `json:"_id"`
+	Port        int       `json:"port"`
+	ReleaseAt   time.Time `json:"release_at"`
+	IP          string    `json:"ip"`
+	IsBlocked   bool      `json:"is_blocked"`
+	LastCheckAt time.Time `json:"last_check_at"`
 }
 
 // GetProxiesResponse represents the response from GET /proxy
 type GetProxiesResponse struct {
+	Ok      bool            `json:"ok"`
+	Proxies []ProxyResponse `json:"proxies"`
+}
+
+// GetBlockedProxiesResponse represents the response from GET /proxy/blocked
+type GetBlockedProxiesResponse struct {
 	Ok      bool            `json:"ok"`
 	Proxies []ProxyResponse `json:"proxies"`
 }
@@ -33,6 +42,18 @@ type BlockProxyRequest struct {
 
 // BlockProxyResponse represents the response from POST /proxy/blocked
 type BlockProxyResponse struct {
+	Ok bool `json:"ok"`
+}
+
+// UnblockProxyRequest represents the request to unblock a proxy
+type UnblockProxyRequest struct {
+	ID        string `json:"_id"`
+	IP        string `json:"ip"`
+	IsBlocked bool   `json:"is_blocked"`
+}
+
+// UnblockProxyResponse represents the response from POST /proxy/unblock
+type UnblockProxyResponse struct {
 	Ok bool `json:"ok"`
 }
 
@@ -85,6 +106,54 @@ func (y *YarunApi) BlockProxy(ctx context.Context, proxyID string) (*BlockProxyR
 		SetBodyJsonMarshal(request).
 		SetSuccessResult(&response).
 		Post("/proxy/blocked")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, resp.Err
+	}
+
+	return &response, nil
+}
+
+// GetBlockedProxies gets blocked proxies from the API
+func (y *YarunApi) GetBlockedProxies(ctx context.Context, limit int) (*GetBlockedProxiesResponse, error) {
+	var response GetBlockedProxiesResponse
+
+	resp, err := y.client.R().
+		SetContext(ctx).
+		SetQueryParam("limit", strconv.Itoa(limit)).
+		SetSuccessResult(&response).
+		Get("/proxy/blocked")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, resp.Err
+	}
+
+	return &response, nil
+}
+
+// UnblockProxy unblocks a proxy and updates its IP
+func (y *YarunApi) UnblockProxy(ctx context.Context, proxyID, newIP string, isBlocked bool) (*UnblockProxyResponse, error) {
+	request := UnblockProxyRequest{
+		ID:        proxyID,
+		IP:        newIP,
+		IsBlocked: isBlocked,
+	}
+
+	var response UnblockProxyResponse
+
+	resp, err := y.client.R().
+		SetContext(ctx).
+		SetBodyJsonMarshal(request).
+		SetSuccessResult(&response).
+		Post("/proxy/unblock")
 
 	if err != nil {
 		return nil, err

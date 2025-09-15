@@ -7,7 +7,7 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 )
 
-require github.com/goccy/go-yaml v1.18.0 // indirect
+require github.com/goccy/go-yaml v1.18.0
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
