@@ -1,4 +1,4 @@
-package batchproxy
+package batchproxyplay
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	cfbatch "dayusch/internal/pkg/api/cfbatch/v2"
+	"dayusch/internal/pkg/api/pragmatic"
 	"dayusch/internal/pkg/api/yarun"
 	"dayusch/internal/pkg/helper"
 )
@@ -131,9 +132,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				proxyURL := fmt.Sprintf("http://%s:%s@gw.dataimpulse.com:%d", config.ProxyUsername, config.ProxyPassword, proxy.Port)
 				api.SetProxyURL(proxyURL)
 
-				log.Info("Proxy and User-Agent configured", "workerID", workerID, "port", proxy.Port, "userAgent", userAgent[:16]+"...")
-
-				responses, err := api.SendBatch(ctx, int(batchLimit))
+				responses, err := api.GetBatchLink(ctx, int(batchLimit))
 				shouldBlockProxy := false
 
 				if err != nil {
@@ -150,29 +149,113 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 					totalCount := len(responses)
 
 					// Print each response and count failures
-					for i, response := range responses {
+					for _, response := range responses {
 						if !response.Status {
 							failedCount++
 						}
 
-						if response.Result != nil {
-							log.Info("Batch response",
-								"workerID", workerID,
-								"i", i,
-								"a", response.App,
-								"u", response.Username,
-								"s", response.Status,
-								"b", response.Result.Balance,
-								"c", response.Result.Coin)
-						} else {
-							log.Info("Batch response",
-								"workerID", workerID,
-								"i", i,
-								"a", response.App,
-								"u", response.Username,
-								"s", response.Status,
-								"b", "nil",
-								"c", "nil")
+						if response.Link != nil {
+							// state
+							var index *int
+							var counter *int
+
+							pp := pragmatic.NewPragmaticPlay(ctx, *response.Link, userAgent)
+
+							sessionData, err := pp.LoadSession()
+							if err != nil {
+								log.Error("error on load game", "error", err)
+								return
+							}
+
+							if sessionData == nil {
+								log.Error("error on load game: sessionData is nil")
+								return
+							}
+
+							initResData, err := pp.DoInit(sessionData.MGCKey, response.GameSymbol)
+							if err != nil {
+								log.Error("error on init game", "error", err)
+								return
+							}
+
+							tmpIndex := initResData.Index + 1
+							index = &tmpIndex
+							tmpCounter := initResData.Counter + 1
+							counter = &tmpCounter
+
+							log.Info("user info", "balance", initResData.Balance, "total_win", initResData.TotalWin, "next_action", initResData.NextAction)
+
+							// loop for spin
+							for {
+								// Check balance threshold
+								if initResData.NextAction == "s" && (initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0) {
+									log.Info("threshold reached, stopping loop", "balance", initResData.Balance)
+
+									if initResData.Balance >= 100_000.0 {
+										log.Info("JACKPOT", "balance", initResData.Balance)
+									}
+
+									// tmx.yarunApi.UpdateUserBalance(user.ID, initResData.Balance, homeData.Data.AmountInfo.UsableCurrency)
+									_, err := yarunClient.UpdateUserBalance(ctx, response.ID, initResData.Balance, response.Coin)
+									if err != nil {
+										log.Error("error on update user balance", "error", err)
+
+										return
+									}
+
+									break
+								}
+
+								// Progressive coin logic
+								balance := initResData.Balance
+								amount := 400.0
+								if balance > 10000 && balance <= 30000 {
+									amount = 600.0
+								} else if balance > 30000 && balance <= 50000 {
+									amount = 800.0
+								} else if balance > 50000 && balance <= 100000 {
+									amount = 1000.0
+								}
+
+								coinValue := int(amount / 20.0)
+								coin := &coinValue
+
+								if initResData.NextAction == "s" {
+									respData, err := pp.DoSpin(sessionData.MGCKey, response.GameSymbol, *coin, *index, *counter, "aq")
+									if err != nil {
+										log.Error("error on spin game", "error", err)
+
+										return
+									}
+
+									tmpIndex = respData.Index + 1
+									index = &tmpIndex
+									tmpCounter = respData.Counter + 1
+									counter = &tmpCounter
+
+									log.Info("spin action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction, "coin", *coin, "amount", amount)
+									initResData = respData // update state for next action
+								}
+
+								if initResData.NextAction == "c" {
+									respData, err := pp.DoCollect(sessionData.MGCKey, response.GameSymbol, *index, *counter)
+									if err != nil {
+										log.Error("error on collect", "error", err)
+
+										return
+									}
+
+									tmpIndex = respData.Index + 1
+									index = &tmpIndex
+									tmpCounter = respData.Counter + 1
+									counter = &tmpCounter
+
+									log.Info("collect action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction)
+									initResData = respData // update state for next action
+								}
+
+								time.Sleep(32 * time.Millisecond)
+							}
 						}
 					}
 

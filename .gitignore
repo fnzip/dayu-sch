@@ -3,5 +3,6 @@
 batch-cli
 stat-cli
 batchproxy-cli
+batchproxyplay-cli
 proxycheck-cli
 pxy.yml

@@ -57,6 +57,18 @@ type UnblockProxyResponse struct {
 	Ok bool `json:"ok"`
 }
 
+// UpdateBalanceRequest represents the request to update user balance
+type UpdateBalanceRequest struct {
+	ID      string  `json:"_id"`
+	Balance float64 `json:"balance"`
+	Coin    float64 `json:"coin"`
+}
+
+// UpdateBalanceResponse represents the response from POST /user/balance
+type UpdateBalanceResponse struct {
+	Ok bool `json:"ok"`
+}
+
 // NewYarunApi creates a new yarun API client
 func NewYarunApi(baseURL, token string) *YarunApi {
 	client := req.C().
@@ -154,6 +166,32 @@ func (y *YarunApi) UnblockProxy(ctx context.Context, proxyID, newIP string, isBl
 		SetBodyJsonMarshal(request).
 		SetSuccessResult(&response).
 		Post("/proxy/unblock")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, resp.Err
+	}
+
+	return &response, nil
+}
+
+func (y *YarunApi) UpdateUserBalance(ctx context.Context, userID string, balance, coin float64) (*UpdateBalanceResponse, error) {
+	request := UpdateBalanceRequest{
+		ID:      userID,
+		Balance: balance,
+		Coin:    coin,
+	}
+
+	var response UpdateBalanceResponse
+
+	resp, err := y.client.R().
+		SetContext(ctx).
+		SetBodyJsonMarshal(request).
+		SetSuccessResult(&response).
+		Post("/user/balance")
 
 	if err != nil {
 		return nil, err

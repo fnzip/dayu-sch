@@ -23,6 +23,16 @@ type BatchResponse struct {
 	Result   *BatchResult `json:"r"` // r = result (can be null)
 }
 
+type BatchResponseLink struct {
+	App        string  `json:"a"`  // a = app
+	Username   string  `json:"u"`  // u = username
+	ID         string  `json:"i"`  // i = user mongo id
+	Coin       float64 `json:"c"`  // c = user coin
+	GameSymbol string  `json:"gs"` // gs = pp game symbol
+	Status     bool    `json:"s"`  // s = status
+	Link       *string `json:"l"`  // l = link (can be null)
+}
+
 func NewCFBatchApi(baseUrl, token string) *CFBatchApi {
 	client := req.C().
 		SetCommonHeader("x-token", token).
@@ -57,6 +67,25 @@ func (a *CFBatchApi) SendBatch(ctx context.Context, limit int) ([]BatchResponse,
 		SetQueryParam("limit", fmt.Sprintf("%d", limit)).
 		SetSuccessResult(&response).
 		Post("/batch")
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.IsSuccessState() {
+		return nil, fmt.Errorf("API request failed with status: %s", resp.Status)
+	}
+
+	return response, nil
+}
+
+func (a *CFBatchApi) GetBatchLink(ctx context.Context, limit int) ([]BatchResponseLink, error) {
+	var response []BatchResponseLink
+
+	resp, err := a.client.R().
+		SetContext(ctx).
+		SetQueryParam("limit", fmt.Sprintf("%d", limit)).
+		SetSuccessResult(&response).
+		Post("/links")
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package batchproxy
+package helper
 
 import (
 	"sync"
