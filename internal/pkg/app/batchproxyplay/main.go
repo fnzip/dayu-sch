@@ -161,7 +161,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				log.Info("Worker started", "workerID", workerID, "assignedPort", proxy.Port)
 
 				// Send batch request with root context
-				ctx, cancel := context.WithTimeout(rootCtx, 120*time.Second)
+				ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 				defer cancel()
 
 				api := parentApi.Clone()
