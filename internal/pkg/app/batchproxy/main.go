@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -27,6 +30,19 @@ type Config struct {
 
 func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 	var config Config
+
+	// Create a root context that will be cancelled on shutdown
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		log.Info("Received shutdown signal, stopping gracefully...")
+		rootCancel() // This will cancel all derived contexts
+	}()
 
 	if inputFile != "" {
 		// Read and parse YAML config file
@@ -73,22 +89,48 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 	log.Info("Created parent CFBatchApi and yarun client instances")
 
 	for {
+		// Check for shutdown signal
+		select {
+		case <-rootCtx.Done():
+			log.Info("Shutdown requested, stopping main loop")
+			return
+		default:
+		}
+
 		log.Info("Starting new batch round")
 
 		// Get available proxies from yarun
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 		proxiesResp, err := yarunClient.GetProxies(ctx, int(maxConcurrent))
 		cancel()
 
 		if err != nil {
+			if ctx.Err() == context.Canceled {
+				log.Info("Proxy request cancelled due to shutdown")
+				return
+			}
 			log.Error("Failed to get proxies from yarun", "error", err)
-			time.Sleep(time.Duration(delay) * time.Second)
+
+			// Check for shutdown before sleeping
+			select {
+			case <-rootCtx.Done():
+				log.Info("Shutdown requested during delay")
+				return
+			case <-time.After(time.Duration(delay) * time.Second):
+			}
 			continue
 		}
 
 		if len(proxiesResp.Proxies) == 0 {
 			log.Warn("No available proxies returned from yarun")
-			time.Sleep(time.Duration(delay) * time.Second)
+
+			// Check for shutdown before sleeping
+			select {
+			case <-rootCtx.Done():
+				log.Info("Shutdown requested during delay")
+				return
+			case <-time.After(time.Duration(delay) * time.Second):
+			}
 			continue
 		}
 
@@ -108,8 +150,20 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 			go func(workerID int, proxy yarun.ProxyResponse) {
 				defer wg.Done()
 
+				// Check for shutdown signal at the start of worker
+				select {
+				case <-rootCtx.Done():
+					log.Info("Shutdown requested, worker exiting early", "workerID", workerID)
+					return
+				default:
+				}
+
 				// Acquire semaphore
-				if err := sem.Acquire(context.Background(), 1); err != nil {
+				if err := sem.Acquire(rootCtx, 1); err != nil {
+					if err == context.Canceled {
+						log.Info("Semaphore acquisition cancelled due to shutdown", "workerID", workerID)
+						return
+					}
 					log.Error("Failed to acquire semaphore", "workerID", workerID, "error", err)
 					return
 				}
@@ -118,7 +172,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				log.Info("Worker started", "workerID", workerID, "assignedPort", proxy.Port)
 
 				// Send batch request
-				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+				ctx, cancel := context.WithTimeout(rootCtx, 120*time.Second)
 				defer cancel()
 
 				api := parentApi.Clone()
@@ -137,6 +191,10 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 				shouldBlockProxy := false
 
 				if err != nil {
+					if ctx.Err() == context.Canceled {
+						log.Info("Batch request cancelled due to shutdown", "workerID", workerID)
+						return
+					}
 					log.Error("SendBatch failed", "workerID", workerID, "port", proxy.Port, "error", err)
 					shouldBlockProxy = true
 				} else {
@@ -146,43 +204,75 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						"responseCount", len(responses))
 
 					// Analyze response status to determine if proxy should be blocked
-					var failedCount int
+					var failedCount int32
 					totalCount := len(responses)
 
-					// Print each response and count failures
-					for i, response := range responses {
-						if !response.Status {
-							failedCount++
-						}
+					// Process each response concurrently using goroutines
+					var responseWg sync.WaitGroup
+					responseSem := semaphore.NewWeighted(int64(len(responses))) // Allow all responses to run concurrently
 
-						if response.Result != nil {
-							log.Info("Batch response",
-								"workerID", workerID,
-								"i", i,
-								"a", response.App,
-								"u", response.Username,
-								"s", response.Status,
-								"b", response.Result.Balance,
-								"c", response.Result.Coin)
-						} else {
-							log.Info("Batch response",
-								"workerID", workerID,
-								"i", i,
-								"a", response.App,
-								"u", response.Username,
-								"s", response.Status,
-								"b", "nil",
-								"c", "nil")
-						}
+					for i, response := range responses {
+						responseWg.Add(1)
+						go func(idx int, resp cfbatch.BatchResponse) {
+							defer responseWg.Done()
+
+							// Check for shutdown signal
+							select {
+							case <-rootCtx.Done():
+								return
+							default:
+							}
+
+							// Acquire semaphore for this response processing
+							if err := responseSem.Acquire(rootCtx, 1); err != nil {
+								if err == context.Canceled {
+									log.Info("Response processing cancelled due to shutdown")
+									return
+								}
+								log.Error("Failed to acquire response semaphore", "error", err)
+								return
+							}
+							defer responseSem.Release(1)
+
+							if !resp.Status {
+								atomic.AddInt32(&failedCount, 1)
+							}
+
+							if resp.Result != nil {
+								log.Info("Batch response",
+									"workerID", workerID,
+									"i", idx,
+									"a", resp.App,
+									"u", resp.Username,
+									"s", resp.Status,
+									"b", resp.Result.Balance,
+									"c", resp.Result.Coin)
+							} else {
+								log.Info("Batch response",
+									"workerID", workerID,
+									"i", idx,
+									"a", resp.App,
+									"u", resp.Username,
+									"s", resp.Status,
+									"b", "nil",
+									"c", "nil")
+							}
+						}(i, response)
 					}
+
+					// Wait for all response processing to complete
+					log.Info("Waiting for all response processing to complete", "totalResponses", totalCount)
+					responseWg.Wait()
+					log.Info("All response processing completed")
 
 					// Check if failure rate is >= 50%
 					if totalCount > 0 {
-						failureRate := float64(failedCount) / float64(totalCount)
+						finalFailedCount := atomic.LoadInt32(&failedCount)
+						failureRate := float64(finalFailedCount) / float64(totalCount)
 						log.Info("Batch response analysis",
 							"workerID", workerID,
 							"totalResponses", totalCount,
-							"failedResponses", failedCount,
+							"failedResponses", finalFailedCount,
 							"failureRate", fmt.Sprintf("%.2f%%", failureRate*100))
 
 						if failureRate >= 0.5 {
@@ -197,11 +287,15 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				// Block proxy if needed (either due to API error or high failure rate)
 				if shouldBlockProxy {
-					blockCtx, blockCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					blockCtx, blockCancel := context.WithTimeout(rootCtx, 30*time.Second)
 					_, blockErr := yarunClient.BlockProxy(blockCtx, proxy.ID)
 					blockCancel()
 
 					if blockErr != nil {
+						if blockCtx.Err() == context.Canceled {
+							log.Info("Block proxy cancelled due to shutdown", "workerID", workerID)
+							return
+						}
 						log.Error("Failed to block proxy", "workerID", workerID, "port", proxy.Port, "error", blockErr)
 					} else {
 						log.Info("Proxy blocked", "workerID", workerID, "port", proxy.Port, "reason", func() string {
@@ -220,7 +314,12 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 		wg.Wait()
 		log.Info("All workers completed, starting next round")
 
-		// Optional: add a small delay between rounds
-		time.Sleep(time.Duration(delay) * time.Second)
+		// Check for shutdown signal before delay
+		select {
+		case <-rootCtx.Done():
+			log.Info("Shutdown requested, exiting main loop")
+			return
+		case <-time.After(time.Duration(delay) * time.Second):
+		}
 	}
 }
