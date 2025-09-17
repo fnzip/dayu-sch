@@ -148,22 +148,25 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 			wg.Add(1)
 			go func(workerID int, proxy yarun.ProxyResponse) {
-				defer wg.Done()
+				defer func() {
+					log.Info("Worker finished", "workerID", workerID, "assignedPort", proxy.Port)
+					wg.Done()
+				}()
 
-				// Check for shutdown signal at the start of worker
+				// Add timeout for entire worker
+				workerCtx, workerCancel := context.WithTimeout(rootCtx, 10*time.Minute)
+				defer workerCancel()
+
+				// Check for early cancellation
 				select {
-				case <-rootCtx.Done():
-					log.Info("Shutdown requested, worker exiting early", "workerID", workerID)
+				case <-workerCtx.Done():
+					log.Warn("Worker cancelled before starting", "workerID", workerID)
 					return
 				default:
 				}
 
 				// Acquire semaphore
-				if err := sem.Acquire(rootCtx, 1); err != nil {
-					if err == context.Canceled {
-						log.Info("Semaphore acquisition cancelled due to shutdown", "workerID", workerID)
-						return
-					}
+				if err := sem.Acquire(context.Background(), 1); err != nil {
 					log.Error("Failed to acquire semaphore", "workerID", workerID, "error", err)
 					return
 				}
@@ -171,8 +174,8 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				log.Info("Worker started", "workerID", workerID, "assignedPort", proxy.Port)
 
-				// Send batch request
-				ctx, cancel := context.WithTimeout(rootCtx, 120*time.Second)
+				// Send batch request with worker context
+				ctx, cancel := context.WithTimeout(workerCtx, 60*time.Second)
 				defer cancel()
 
 				api := parentApi.Clone()
@@ -195,6 +198,9 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						log.Info("Batch request cancelled due to shutdown", "workerID", workerID)
 						return
 					}
+					if ctx.Err() == context.DeadlineExceeded {
+						log.Warn("Batch request timeout", "workerID", workerID, "port", proxy.Port, "timeout", "60s")
+					}
 					log.Error("SendBatch failed", "workerID", workerID, "port", proxy.Port, "error", err)
 					shouldBlockProxy = true
 				} else {
@@ -216,17 +222,24 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						go func(idx int, resp cfbatch.BatchResponse) {
 							defer responseWg.Done()
 
+							// Add timeout for entire response processing
+							responseCtx, responseCancel := context.WithTimeout(workerCtx, 2*time.Minute)
+							defer responseCancel()
+
 							// Check for shutdown signal
 							select {
-							case <-rootCtx.Done():
+							case <-responseCtx.Done():
+								if responseCtx.Err() == context.DeadlineExceeded {
+									log.Warn("Response processing timeout", "responseIndex", idx, "workerID", workerID)
+								}
 								return
 							default:
 							}
 
 							// Acquire semaphore for this response processing
-							if err := responseSem.Acquire(rootCtx, 1); err != nil {
-								if err == context.Canceled {
-									log.Info("Response processing cancelled due to shutdown")
+							if err := responseSem.Acquire(responseCtx, 1); err != nil {
+								if err == context.Canceled || err == context.DeadlineExceeded {
+									log.Info("Response processing cancelled or timed out")
 									return
 								}
 								log.Error("Failed to acquire response semaphore", "error", err)
@@ -287,13 +300,13 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				// Block proxy if needed (either due to API error or high failure rate)
 				if shouldBlockProxy {
-					blockCtx, blockCancel := context.WithTimeout(rootCtx, 30*time.Second)
+					blockCtx, blockCancel := context.WithTimeout(workerCtx, 30*time.Second)
 					_, blockErr := yarunClient.BlockProxy(blockCtx, proxy.ID)
 					blockCancel()
 
 					if blockErr != nil {
-						if blockCtx.Err() == context.Canceled {
-							log.Info("Block proxy cancelled due to shutdown", "workerID", workerID)
+						if blockCtx.Err() == context.Canceled || blockCtx.Err() == context.DeadlineExceeded {
+							log.Info("Block proxy cancelled or timed out", "workerID", workerID)
 							return
 						}
 						log.Error("Failed to block proxy", "workerID", workerID, "port", proxy.Port, "error", blockErr)
@@ -309,10 +322,33 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 			}(i, proxy)
 		}
 
-		// Wait for all workers to complete
+		// Wait for all workers to complete with timeout monitoring
+		workersDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(workersDone)
+		}()
+
 		log.Info("Waiting for all workers to complete")
-		wg.Wait()
-		log.Info("All workers completed, starting next round")
+
+		// Monitor workers with periodic logging
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-workersDone:
+				log.Info("All workers completed, starting next round")
+				goto nextRound
+			case <-ticker.C:
+				log.Info("Still waiting for workers to complete...")
+			case <-rootCtx.Done():
+				log.Info("Shutdown requested while waiting for workers")
+				return
+			}
+		}
+
+	nextRound:
 
 		// Check for shutdown signal before delay
 		select {
