@@ -322,8 +322,14 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 										lastBalance = initResData.Balance
 									}
 
+									// Safety check: if NextAction is not 's' or 'c', break the loop
+									if initResData.NextAction != "s" && initResData.NextAction != "c" {
+										log.Warn("Unexpected next action, stopping game loop", "nextAction", initResData.NextAction, "balance", initResData.Balance, "iterations", iteration)
+										break
+									}
+
 									// Check balance threshold (move this BEFORE action processing)
-									if initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0 {
+									if initResData.NextAction == "s" && initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0 {
 										log.Info("threshold reached, stopping loop", "balance", initResData.Balance, "iterations", iteration)
 
 										if initResData.Balance >= 100_000.0 {
@@ -345,12 +351,6 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 											return
 										}
 
-										break
-									}
-
-									// Safety check: if NextAction is not 's' or 'c', break the loop
-									if initResData.NextAction != "s" && initResData.NextAction != "c" {
-										log.Warn("Unexpected next action, stopping game loop", "nextAction", initResData.NextAction, "balance", initResData.Balance, "iterations", iteration)
 										break
 									}
 
