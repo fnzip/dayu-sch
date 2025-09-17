@@ -149,7 +149,22 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 			wg.Add(1)
 			go func(workerID int, proxy yarun.ProxyResponse) {
-				defer wg.Done()
+				defer func() {
+					log.Info("Worker finished", "workerID", workerID, "assignedPort", proxy.Port)
+					wg.Done()
+				}()
+
+				// Add timeout for entire worker
+				workerCtx, workerCancel := context.WithTimeout(rootCtx, 15*time.Minute)
+				defer workerCancel()
+
+				// Check for early cancellation
+				select {
+				case <-workerCtx.Done():
+					log.Warn("Worker cancelled before starting", "workerID", workerID)
+					return
+				default:
+				}
 
 				// Acquire semaphore
 				if err := sem.Acquire(context.Background(), 1); err != nil {
@@ -160,8 +175,8 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				log.Info("Worker started", "workerID", workerID, "assignedPort", proxy.Port)
 
-				// Send batch request with root context
-				ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+				// Send batch request with worker context
+				ctx, cancel := context.WithTimeout(workerCtx, 30*time.Second)
 				defer cancel()
 
 				api := parentApi.Clone()
@@ -203,17 +218,24 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 						go func(resp cfbatch.BatchResponseLink) {
 							defer responseWg.Done()
 
+							// Add timeout for entire response processing
+							responseCtx, responseCancel := context.WithTimeout(workerCtx, 10*time.Minute)
+							defer responseCancel()
+
 							// Check for shutdown signal
 							select {
-							case <-rootCtx.Done():
+							case <-responseCtx.Done():
+								if responseCtx.Err() == context.DeadlineExceeded {
+									log.Warn("Response processing timeout", "responseID", resp.ID)
+								}
 								return
 							default:
 							}
 
 							// Acquire semaphore for this response processing
-							if err := responseSem.Acquire(rootCtx, 1); err != nil {
-								if err == context.Canceled {
-									log.Info("Response processing cancelled due to shutdown")
+							if err := responseSem.Acquire(responseCtx, 1); err != nil {
+								if err == context.Canceled || err == context.DeadlineExceeded {
+									log.Info("Response processing cancelled or timed out")
 									return
 								}
 								log.Error("Failed to acquire response semaphore", "error", err)
@@ -230,7 +252,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 								var index *int
 								var counter *int
 
-								pp := pragmatic.NewPragmaticPlay(rootCtx, *resp.Link, userAgent)
+								pp := pragmatic.NewPragmaticPlay(responseCtx, *resp.Link, userAgent)
 
 								sessionData, err := pp.LoadSession()
 								if err != nil {
@@ -256,26 +278,62 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 								log.Info("user info", "balance", initResData.Balance, "total_win", initResData.TotalWin, "next_action", initResData.NextAction)
 
-								// loop for spin
+								// loop for spin with timeout and iteration limit
+								gameLoopCtx, gameLoopCancel := context.WithTimeout(responseCtx, 5*time.Minute)
+								defer gameLoopCancel()
+
+								maxIterations := 1000
+								iteration := 0
+								lastBalance := initResData.Balance
+								noProgressCount := 0
+								maxNoProgressIterations := 50
+
 								for {
+									iteration++
+
 									// Check for shutdown signal in the game loop
 									select {
-									case <-rootCtx.Done():
-										log.Info("Shutdown requested, stopping game loop")
+									case <-gameLoopCtx.Done():
+										if gameLoopCtx.Err() == context.DeadlineExceeded {
+											log.Warn("Game loop timeout reached, stopping", "iterations", iteration)
+										} else {
+											log.Info("Shutdown requested, stopping game loop")
+										}
 										return
 									default:
 									}
 
-									// Check balance threshold
-									if initResData.NextAction == "s" && (initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0) {
-										log.Info("threshold reached, stopping loop", "balance", initResData.Balance)
+									// Check iteration limit
+									if iteration > maxIterations {
+										log.Warn("Maximum iterations reached, stopping game loop", "iterations", iteration, "balance", initResData.Balance)
+										break
+									}
+
+									// Check for no progress (balance not changing)
+									if initResData.Balance == lastBalance {
+										noProgressCount++
+										if noProgressCount >= maxNoProgressIterations {
+											log.Warn("No progress detected for too many iterations, stopping game loop",
+												"iterations", iteration, "balance", initResData.Balance, "noProgressCount", noProgressCount)
+											break
+										}
+									} else {
+										noProgressCount = 0 // reset counter if balance changed
+										lastBalance = initResData.Balance
+									}
+
+									// Check balance threshold (move this BEFORE action processing)
+									if initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0 {
+										log.Info("threshold reached, stopping loop", "balance", initResData.Balance, "iterations", iteration)
 
 										if initResData.Balance >= 100_000.0 {
 											log.Info("JACKPOT", "balance", initResData.Balance)
+											// debug
+											// panic("JACKPOT")
 										}
 
 										// tmx.yarunApi.UpdateUserBalance(user.ID, initResData.Balance, homeData.Data.AmountInfo.UsableCurrency)
-										updateCtx, updateCancel := context.WithTimeout(rootCtx, 30*time.Second)
+										updateCtx, updateCancel := context.WithTimeout(responseCtx, 30*time.Second)
 										_, err := yarunClient.UpdateUserBalance(updateCtx, resp.ID, initResData.Balance, resp.Coin)
 										updateCancel()
 										if err != nil {
@@ -287,6 +345,12 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 											return
 										}
 
+										break
+									}
+
+									// Safety check: if NextAction is not 's' or 'c', break the loop
+									if initResData.NextAction != "s" && initResData.NextAction != "c" {
+										log.Warn("Unexpected next action, stopping game loop", "nextAction", initResData.NextAction, "balance", initResData.Balance, "iterations", iteration)
 										break
 									}
 
@@ -305,9 +369,12 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 									coin := &coinValue
 
 									if initResData.NextAction == "s" {
+										_, spinCancel := context.WithTimeout(gameLoopCtx, 30*time.Second)
 										respData, err := pp.DoSpin(sessionData.MGCKey, resp.GameSymbol, *coin, *index, *counter, "aq")
+										spinCancel()
+
 										if err != nil {
-											log.Error("error on spin game", "error", err)
+											log.Error("error on spin game", "error", err, "iteration", iteration)
 											return
 										}
 
@@ -316,14 +383,17 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 										tmpCounter = respData.Counter + 1
 										counter = &tmpCounter
 
-										log.Info("spin action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction, "coin", *coin, "amount", amount)
+										log.Info("spin action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction, "coin", *coin, "amount", amount, "iteration", iteration)
 										initResData = respData // update state for next action
 									}
 
 									if initResData.NextAction == "c" {
+										_, collectCancel := context.WithTimeout(gameLoopCtx, 30*time.Second)
 										respData, err := pp.DoCollect(sessionData.MGCKey, resp.GameSymbol, *index, *counter)
+										collectCancel()
+
 										if err != nil {
-											log.Error("error on collect", "error", err)
+											log.Error("error on collect", "error", err, "iteration", iteration)
 											return
 										}
 
@@ -332,7 +402,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 										tmpCounter = respData.Counter + 1
 										counter = &tmpCounter
 
-										log.Info("collect action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction)
+										log.Info("collect action info", "balance", respData.Balance, "total_win", respData.TotalWin, "new_index", *index, "new_counter", *counter, "next_action", respData.NextAction, "iteration", iteration)
 										initResData = respData // update state for next action
 									}
 
@@ -369,13 +439,13 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 
 				// Block proxy if needed (either due to API error or high failure rate)
 				if shouldBlockProxy {
-					blockCtx, blockCancel := context.WithTimeout(rootCtx, 30*time.Second)
+					blockCtx, blockCancel := context.WithTimeout(workerCtx, 30*time.Second)
 					_, blockErr := yarunClient.BlockProxy(blockCtx, proxy.ID)
 					blockCancel()
 
 					if blockErr != nil {
-						if blockCtx.Err() == context.Canceled {
-							log.Info("Block proxy cancelled due to shutdown", "workerID", workerID)
+						if blockCtx.Err() == context.Canceled || blockCtx.Err() == context.DeadlineExceeded {
+							log.Info("Block proxy cancelled or timed out", "workerID", workerID)
 							return
 						}
 						log.Error("Failed to block proxy", "workerID", workerID, "port", proxy.Port, "error", blockErr)
@@ -391,10 +461,33 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 			}(i, proxy)
 		}
 
-		// Wait for all workers to complete
+		// Wait for all workers to complete with timeout monitoring
+		workersDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(workersDone)
+		}()
+
 		log.Info("Waiting for all workers to complete")
-		wg.Wait()
-		log.Info("All workers completed, starting next round")
+
+		// Monitor workers with periodic logging
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-workersDone:
+				log.Info("All workers completed, starting next round")
+				goto nextRound
+			case <-ticker.C:
+				log.Info("Still waiting for workers to complete...")
+			case <-rootCtx.Done():
+				log.Info("Shutdown requested while waiting for workers")
+				return
+			}
+		}
+
+	nextRound:
 
 		// Check for shutdown signal before delay
 		select {
