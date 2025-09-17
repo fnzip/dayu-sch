@@ -329,7 +329,7 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 									}
 
 									// Check balance threshold (move this BEFORE action processing)
-									if initResData.NextAction == "s" && initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0 {
+									if initResData.NextAction == "s" && (initResData.Balance <= 500.0 || initResData.Balance >= 100_000.0) {
 										log.Info("threshold reached, stopping loop", "balance", initResData.Balance, "iterations", iteration)
 
 										if initResData.Balance >= 100_000.0 {
