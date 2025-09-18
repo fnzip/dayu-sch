@@ -5,4 +5,5 @@ stat-cli
 batchproxy-cli
 batchproxyplay-cli
 proxycheck-cli
+dupdel-cli
 pxy.yml
