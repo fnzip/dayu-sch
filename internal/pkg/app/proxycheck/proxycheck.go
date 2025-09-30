@@ -70,6 +70,10 @@ func (pc *ProxyChecker) CheckProxies(ctx context.Context) error {
 		return fmt.Errorf("failed to get blocked proxies: %w", err)
 	}
 
+	if blockedResp == nil {
+		return fmt.Errorf("received nil response from yarun GetBlockedProxies")
+	}
+
 	if !blockedResp.Ok {
 		return fmt.Errorf("API returned not ok for blocked proxies")
 	}

@@ -121,6 +121,19 @@ func Run(maxConcurrent, batchLimit, delay uint, inputFile string) {
 			continue
 		}
 
+		if proxiesResp == nil {
+			log.Error("Received nil response from yarun GetProxies")
+
+			// Check for shutdown before sleeping
+			select {
+			case <-rootCtx.Done():
+				log.Info("Shutdown requested during delay")
+				return
+			case <-time.After(time.Duration(delay) * time.Second):
+			}
+			continue
+		}
+
 		if len(proxiesResp.Proxies) == 0 {
 			log.Warn("No available proxies returned from yarun")
 
